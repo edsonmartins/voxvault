@@ -15,6 +15,7 @@ function App() {
   const { notify } = useNotification();
   const [showSettings, setShowSettings] = useState(false);
   const [stealthMode, setStealthMode] = useState(true);
+  const [targetLang, setTargetLang] = useState("pt");
   const [duration, setDuration] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -53,6 +54,33 @@ function App() {
       );
     }
   }, [stopSession, notify]);
+
+  // Sync target language with Python API
+  const handleLangChange = useCallback(
+    async (lang: string) => {
+      setTargetLang(lang);
+      try {
+        await fetch("http://localhost:8766/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target_language: lang }),
+        });
+      } catch {
+        // Silently fail if API is down
+      }
+    },
+    []
+  );
+
+  // Load initial target language from API
+  useEffect(() => {
+    fetch("http://localhost:8766/api/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.target_language) setTargetLang(data.target_language);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleCopy = useCallback(() => {
     const text = chunks
@@ -145,11 +173,32 @@ function App() {
           </button>
         </div>
 
-        {session && (
-          <div className="session-info">
-            {session.title || "Active Session"}
+        <div className="action-row">
+          <div className="lang-selector">
+            <label className="lang-label">Output:</label>
+            <select
+              className="lang-select"
+              value={targetLang}
+              onChange={(e) => handleLangChange(e.target.value)}
+            >
+              <option value="pt">PT</option>
+              <option value="en">EN</option>
+              <option value="es">ES</option>
+              <option value="fr">FR</option>
+              <option value="de">DE</option>
+              <option value="ja">JA</option>
+              <option value="zh">ZH</option>
+              <option value="ko">KO</option>
+              <option value="it">IT</option>
+            </select>
           </div>
-        )}
+
+          {session && (
+            <div className="session-info">
+              {session.title || "Active Session"}
+            </div>
+          )}
+        </div>
       </div>
 
       <SettingsPanel
