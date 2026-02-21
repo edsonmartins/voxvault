@@ -1,5 +1,5 @@
 [workspace]
-members = ["voxvault-core", "voxtral-mini-realtime-rs"]
+members = ["voxvault-core", "voxtral-mini-realtime-rs", "src-tauri"]
 resolver = "2"
 
 # Propagate the cubecl-wgpu patch from voxtral-mini-realtime-rs.
