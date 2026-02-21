@@ -104,8 +104,10 @@ export function SettingsPanel({
               onChange={(e) => setTranslationMode(e.target.value)}
             >
               <option value="disabled">Disabled</option>
+              <option value="openrouter">OpenRouter</option>
               <option value="claude">Claude (Haiku)</option>
               <option value="openai">OpenAI (GPT-4o-mini)</option>
+              <option value="local">Local (MLX Gemma 3)</option>
             </select>
           </div>
 
@@ -132,6 +134,9 @@ export function SettingsPanel({
             <div className="setting-group">
               <label className="setting-label">API Keys</label>
               <div className="api-status">
+                <span className={settings.openrouter_api_key_set ? "key-set" : "key-missing"}>
+                  OpenRouter: {settings.openrouter_api_key_set ? "Configured" : "Not set"}
+                </span>
                 <span className={settings.anthropic_api_key_set ? "key-set" : "key-missing"}>
                   Anthropic: {settings.anthropic_api_key_set ? "Configured" : "Not set"}
                 </span>
@@ -139,6 +144,11 @@ export function SettingsPanel({
                   OpenAI: {settings.openai_api_key_set ? "Configured" : "Not set"}
                 </span>
               </div>
+              {settings.openrouter_api_key_set && (
+                <p className="setting-desc" style={{ marginTop: 4 }}>
+                  Model: {settings.openrouter_model}
+                </p>
+              )}
             </div>
           )}
 

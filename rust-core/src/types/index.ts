@@ -50,6 +50,8 @@ export interface AppSettings {
   target_language: string;
   anthropic_api_key_set: boolean;
   openai_api_key_set: boolean;
+  openrouter_api_key_set: boolean;
+  openrouter_model: string;
   sessions_dir: string;
   rust_ws_url: string;
 }

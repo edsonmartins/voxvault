@@ -24,10 +24,12 @@ class Settings(BaseSettings):
     api_port: int = 8766
 
     # Translation
-    translation_mode: Literal["disabled", "claude", "openai", "local"] = "disabled"
+    translation_mode: Literal["disabled", "claude", "openai", "openrouter", "local"] = "disabled"
     target_language: str = "pt"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = "google/gemma-3-27b-it:free"
 
     # Local model (optional, for mode=local)
     gemma_model_path: str = ""

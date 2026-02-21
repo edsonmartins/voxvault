@@ -5,12 +5,14 @@ import { TranscriptView } from "./components/TranscriptView";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useTranscript } from "./hooks/useTranscript";
 import { useSession } from "./hooks/useSession";
+import { useNotification } from "./hooks/useNotification";
 
 function App() {
   const { chunks, connected, statusText, clearChunks } = useTranscript();
   const { session, isActive, loading, error, startSession, stopSession } =
     useSession();
 
+  const { notify } = useNotification();
   const [showSettings, setShowSettings] = useState(false);
   const [stealthMode, setStealthMode] = useState(true);
   const [duration, setDuration] = useState(0);
@@ -37,11 +39,20 @@ function App() {
   const handleStart = useCallback(() => {
     clearChunks();
     startSession();
-  }, [clearChunks, startSession]);
+    notify("VoxVault", "Session started — transcribing...");
+  }, [clearChunks, startSession, notify]);
 
   const handleStop = useCallback(async () => {
-    await stopSession();
-  }, [stopSession]);
+    const result = await stopSession();
+    if (result) {
+      const mins = Math.floor(result.duration_seconds / 60);
+      const secs = result.duration_seconds % 60;
+      notify(
+        "Session ended",
+        `Duration: ${mins}m ${secs}s — ${result.transcript_chunks} chunks recorded`
+      );
+    }
+  }, [stopSession, notify]);
 
   const handleCopy = useCallback(() => {
     const text = chunks

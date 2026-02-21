@@ -83,6 +83,8 @@ class SettingsResponse(BaseModel):
     target_language: str
     anthropic_api_key_set: bool
     openai_api_key_set: bool
+    openrouter_api_key_set: bool
+    openrouter_model: str
     sessions_dir: str
     rust_ws_url: str
 
@@ -94,4 +96,6 @@ class SettingsUpdateRequest(BaseModel):
     target_language: str | None = None
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openrouter_model: str | None = None
     sessions_dir: str | None = None

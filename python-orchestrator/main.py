@@ -44,6 +44,8 @@ translator: TranslationService = create_translation_service(
     mode=settings.translation_mode,
     anthropic_api_key=settings.anthropic_api_key,
     openai_api_key=settings.openai_api_key,
+    openrouter_api_key=settings.openrouter_api_key,
+    openrouter_model=settings.openrouter_model,
     gemma_model_path=settings.gemma_model_path,
 )
 session_mgr = SessionManager()
@@ -287,6 +289,8 @@ async def get_settings():
         target_language=settings.target_language,
         anthropic_api_key_set=bool(settings.anthropic_api_key),
         openai_api_key_set=bool(settings.openai_api_key),
+        openrouter_api_key_set=bool(settings.openrouter_api_key),
+        openrouter_model=settings.openrouter_model,
         sessions_dir=str(settings.sessions_dir),
         rust_ws_url=settings.rust_ws_url,
     )
@@ -305,6 +309,10 @@ async def update_settings(request: SettingsUpdateRequest):
         settings.anthropic_api_key = request.anthropic_api_key
     if request.openai_api_key is not None:
         settings.openai_api_key = request.openai_api_key
+    if request.openrouter_api_key is not None:
+        settings.openrouter_api_key = request.openrouter_api_key
+    if request.openrouter_model is not None:
+        settings.openrouter_model = request.openrouter_model
     if request.sessions_dir is not None:
         settings.sessions_dir = Path(request.sessions_dir)
 
@@ -313,6 +321,8 @@ async def update_settings(request: SettingsUpdateRequest):
         mode=settings.translation_mode,
         anthropic_api_key=settings.anthropic_api_key,
         openai_api_key=settings.openai_api_key,
+        openrouter_api_key=settings.openrouter_api_key,
+        openrouter_model=settings.openrouter_model,
         gemma_model_path=settings.gemma_model_path,
     )
     minutes_gen = MinutesGenerator(translator)
