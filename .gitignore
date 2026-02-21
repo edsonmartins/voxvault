@@ -1,0 +1,41 @@
+# Rust
+target/
+*.rs.bk
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Models (too large for git)
+models/*.gguf
+models/*.safetensors
+models/gemma3/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Tauri build artifacts
+rust-core/src-tauri/target/
+
+# Claude
+.claude/
