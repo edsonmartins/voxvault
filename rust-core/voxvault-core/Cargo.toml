@@ -1,0 +1,40 @@
+[package]
+name = "voxvault-core"
+version = "0.1.0"
+edition = "2021"
+description = "VoxVault core: real-time audio capture, Voxtral transcription, and WebSocket streaming"
+license = "Apache-2.0"
+
+[[bin]]
+name = "voxvault-cli"
+path = "src/bin/cli.rs"
+
+[dependencies]
+# Voxtral inference (local workspace dependency)
+voxtral-mini-realtime = { path = "../voxtral-mini-realtime-rs", default-features = false, features = ["wgpu", "native-tokenizer"] }
+
+# Burn framework (must match voxtral-mini-realtime's version)
+burn = { version = "0.20", default-features = false, features = ["std", "wgpu"] }
+
+# Audio capture
+cpal = "0.15"
+
+# WebSocket server
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling & logging
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = "0.4"
+futures = "0.3"
+clap = { version = "4", features = ["derive"] }

@@ -1,0 +1,8 @@
+[workspace]
+members = ["voxvault-core", "voxtral-mini-realtime-rs"]
+resolver = "2"
+
+# Propagate the cubecl-wgpu patch from voxtral-mini-realtime-rs.
+# This caps subgroup size to stay within WebGPU's max_compute_invocations_per_workgroup.
+[patch.crates-io]
+cubecl-wgpu = { path = "voxtral-mini-realtime-rs/patches/cubecl-wgpu-0.9.0" }
