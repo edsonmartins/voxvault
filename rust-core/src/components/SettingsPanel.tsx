@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "../types";
 
-const API_URL = "http://localhost:8766";
+const API_URL = "";
 
 interface SettingsPanelProps {
   visible: boolean;

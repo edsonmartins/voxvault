@@ -205,4 +205,31 @@ impl VoxtralEngine {
             .decode(&text_tokens)
             .context("Failed to decode tokens")
     }
+
+    /// Transcribe an audio buffer with per-token streaming callback.
+    ///
+    /// Calls `on_partial(text_so_far)` each time a new text token is decoded,
+    /// providing the accumulated transcription. The final complete text is
+    /// returned in the `TranscriptResult` with `is_final: true`.
+    pub fn transcribe_streaming<F: FnMut(&str)>(
+        &self,
+        audio: AudioBuffer,
+        on_partial: F,
+    ) -> Result<TranscriptResult> {
+        let model = self.model.as_ref().context("Model not loaded")?;
+        let tokenizer = self.tokenizer.as_ref().context("Tokenizer not loaded")?;
+        let mel_extractor = self.mel_extractor.as_ref().context("Mel extractor not loaded")?;
+        let t_embed = self.t_embed.as_ref().context("Time embedding not loaded")?;
+
+        let streamer = super::streaming::StreamingTranscriber::new(
+            model,
+            tokenizer,
+            mel_extractor,
+            t_embed,
+            &self.device,
+            self.max_mel_frames,
+        );
+
+        streamer.transcribe(audio, on_partial)
+    }
 }

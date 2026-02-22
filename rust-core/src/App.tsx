@@ -60,7 +60,7 @@ function App() {
     async (lang: string) => {
       setTargetLang(lang);
       try {
-        await fetch("http://localhost:8766/api/settings", {
+        await fetch("/api/settings", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target_language: lang }),
@@ -74,7 +74,7 @@ function App() {
 
   // Load initial target language from API
   useEffect(() => {
-    fetch("http://localhost:8766/api/settings")
+    fetch("/api/settings")
       .then((res) => res.json())
       .then((data) => {
         if (data.target_language) setTargetLang(data.target_language);

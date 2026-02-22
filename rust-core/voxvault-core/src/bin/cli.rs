@@ -38,7 +38,7 @@ struct Cli {
     buffer_ms: u32,
 
     /// Minimum audio duration (seconds) before transcribing.
-    #[arg(long, default_value_t = 5.0)]
+    #[arg(long, default_value_t = 3.0)]
     min_duration: f32,
 
     /// Maximum audio duration (seconds) to accumulate before transcribing.
@@ -113,17 +113,30 @@ async fn main() -> Result<()> {
         while let Some(chunk) = audio_rx.recv().await {
             // Feed chunk to processor
             if let Some(audio_buffer) = processor.feed(chunk) {
-                // Transcribe
-                match engine.transcribe(audio_buffer) {
+                let partial_sender = ws_sender.clone();
+                let partial_ts = chrono::Utc::now().timestamp_millis() as u64;
+
+                // Transcribe with per-token streaming
+                match engine.transcribe_streaming(audio_buffer, |partial_text: &str| {
+                    // Send each partial token immediately via WebSocket
+                    let msg = TranscriptMessage::transcript(
+                        partial_text.to_string(),
+                        "auto".to_string(),
+                        partial_ts,
+                        false, // is_final = false for partials
+                    );
+                    let _ = partial_sender.send(msg);
+                }) {
                     Ok(result) => {
                         if !result.text.is_empty() {
                             println!("[{}] {}", result.language, result.text);
 
+                            // Send final complete text
                             let msg = TranscriptMessage::transcript(
                                 result.text,
                                 result.language,
                                 result.timestamp_ms,
-                                result.is_final,
+                                true, // is_final = true
                             );
                             let _ = ws_sender.send(msg);
                         }

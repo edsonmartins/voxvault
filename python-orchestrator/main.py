@@ -51,15 +51,46 @@ translator: TranslationService = create_translation_service(
 session_mgr = SessionManager()
 minutes_gen = MinutesGenerator(translator)
 
-# Queue for SSE broadcast (translated chunks)
-_sse_broadcast_queue: asyncio.Queue | None = None
+# Per-client SSE broadcast queues
+_sse_clients: list[asyncio.Queue] = []
+
+
+def _add_sse_client() -> asyncio.Queue:
+    """Register a new SSE client and return its queue."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+    _sse_clients.append(q)
+    logger.info(f"SSE client connected (total: {len(_sse_clients)})")
+    return q
+
+
+def _remove_sse_client(q: asyncio.Queue) -> None:
+    """Unregister an SSE client."""
+    try:
+        _sse_clients.remove(q)
+    except ValueError:
+        pass
+    logger.info(f"SSE client disconnected (total: {len(_sse_clients)})")
+
+
+def _broadcast_to_sse(data: dict) -> None:
+    """Send data to all connected SSE clients (non-blocking, drops if full)."""
+    for q in _sse_clients:
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            # Drop oldest message to make room for the new one
+            try:
+                q.get_nowait()
+                q.put_nowait(data)
+            except Exception:
+                pass
 
 
 async def _process_transcripts() -> None:
     """Background task: receive from Rust WS, translate, buffer, broadcast to SSE."""
-    global _sse_broadcast_queue
 
     listener_queue = ws_client.add_listener()
+    logger.info("Transcript processor started, waiting for chunks...")
 
     while True:
         try:
@@ -69,9 +100,8 @@ async def _process_transcripts() -> None:
 
         chunk_type = raw_chunk.get("type", "")
         if chunk_type != "transcript":
-            # Forward status/error as-is to SSE
-            if _sse_broadcast_queue:
-                await _sse_broadcast_queue.put(raw_chunk)
+            logger.debug(f"[PIPELINE] Non-transcript: type={chunk_type}")
+            _broadcast_to_sse(raw_chunk)
             continue
 
         text = raw_chunk.get("text", "")
@@ -82,29 +112,50 @@ async def _process_transcripts() -> None:
         if not text.strip():
             continue
 
-        # Translate if enabled and is_final
-        translated_text = text
-        if is_final and settings.translation_mode != "disabled":
-            translated_text = await translator.translate(
-                text, language, settings.target_language
-            )
+        logger.info(f"[PIPELINE] Received: '{text[:80]}...' final={is_final} clients={len(_sse_clients)}")
 
+        # Send original text immediately to SSE (no blocking)
         translated_chunk = TranslatedChunk(
             original_text=text,
-            translated_text=translated_text,
+            translated_text=text,  # original for now
             source_language=language,
             target_language=settings.target_language,
             timestamp=timestamp,
             is_final=is_final,
         )
 
-        # Buffer in session
-        if session_mgr.is_active:
+        # Buffer only final chunks in session (partials are transient)
+        if session_mgr.is_active and is_final:
             await session_mgr.add_chunk(translated_chunk)
 
-        # Broadcast to SSE listeners
-        if _sse_broadcast_queue:
-            await _sse_broadcast_queue.put(translated_chunk.model_dump())
+        # Broadcast immediately with original text
+        _broadcast_to_sse(translated_chunk.model_dump())
+
+        # Translate asynchronously if enabled (non-blocking)
+        if is_final and settings.translation_mode != "disabled":
+            asyncio.create_task(
+                _translate_and_broadcast(text, language, timestamp)
+            )
+
+
+async def _translate_and_broadcast(text: str, language: str, timestamp: int) -> None:
+    """Translate text in background and broadcast the translation as an update."""
+    try:
+        translated_text = await translator.translate(
+            text, language, settings.target_language
+        )
+        if translated_text != text:
+            update = TranslatedChunk(
+                original_text=text,
+                translated_text=translated_text,
+                source_language=language,
+                target_language=settings.target_language,
+                timestamp=timestamp,
+                is_final=True,
+            )
+            _broadcast_to_sse(update.model_dump())
+    except Exception as e:
+        logger.error(f"Background translation error: {e}")
 
 
 # --- Application lifecycle ---
@@ -113,8 +164,6 @@ async def _process_transcripts() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
-    global _sse_broadcast_queue
-
     logger.info("Starting VoxVault Python Orchestrator")
 
     # Initialize SQLite database
@@ -124,9 +173,6 @@ async def lifespan(app: FastAPI):
     # Ensure sessions directory exists
     sessions_dir = settings.sessions_dir.expanduser()
     sessions_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create SSE broadcast queue
-    _sse_broadcast_queue = asyncio.Queue(maxsize=512)
 
     # Connect to Rust WebSocket (non-blocking — retries in background)
     await ws_client.start()
@@ -171,19 +217,21 @@ app.add_middleware(
 async def stream_transcript():
     """Server-Sent Events endpoint for live transcript streaming."""
 
-    async def event_generator():
-        if _sse_broadcast_queue is None:
-            return
+    client_queue = _add_sse_client()
 
-        while True:
-            try:
-                data = await asyncio.wait_for(_sse_broadcast_queue.get(), timeout=30.0)
-                yield f"data: {json.dumps(data)}\n\n"
-            except asyncio.TimeoutError:
-                # Send keepalive comment
-                yield ": keepalive\n\n"
-            except asyncio.CancelledError:
-                break
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    data = await asyncio.wait_for(client_queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive comment
+                    yield ": keepalive\n\n"
+                except asyncio.CancelledError:
+                    break
+        finally:
+            _remove_sse_client(client_queue)
 
     return StreamingResponse(
         event_generator(),

@@ -112,10 +112,17 @@ class RustBridgeClient:
         self._task = asyncio.create_task(self._connect_and_listen())
 
     async def _connect_and_listen(self) -> None:
-        """Connect with retries and then listen. Runs as a background task."""
-        await self.connect()
-        if self._connected:
-            await self.listen_loop()
+        """Connect with retries and then listen. Auto-reconnects on disconnect."""
+        while True:
+            await self.connect()
+            if self._connected:
+                await self.listen_loop()
+            # Connection lost — wait and retry
+            logger.info("Will attempt to reconnect to Rust core in 3s...")
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                break
 
     async def stop(self) -> None:
         """Disconnect from the Rust WebSocket."""

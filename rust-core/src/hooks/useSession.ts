@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SessionInfo, SessionStopResponse } from "../types";
 
-const API_URL = "http://localhost:8766";
+const API_URL = "";
 
 export function useSession() {
   const [session, setSession] = useState<SessionInfo | null>(null);
