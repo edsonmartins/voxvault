@@ -37,13 +37,18 @@ class RustBridgeClient:
         self._listeners = [q for q in self._listeners if q is not queue]
 
     async def broadcast(self, data: dict) -> None:
-        """Send data to all registered listeners."""
+        """Send data to all registered listeners (drops oldest on overflow)."""
         dead_queues = []
         for queue in self._listeners:
             try:
                 queue.put_nowait(data)
             except asyncio.QueueFull:
-                logger.warning("Listener queue full, dropping message")
+                # Drop oldest message to make room for the newest
+                try:
+                    queue.get_nowait()
+                    queue.put_nowait(data)
+                except Exception:
+                    pass
             except Exception:
                 dead_queues.append(queue)
 

@@ -1,15 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TranslatedChunk } from "../types";
 
 const API_URL = "";
 const RECONNECT_DELAY_MS = 3000;
 
+/**
+ * Hook for streaming transcript data via SSE.
+ *
+ * Maintains O(1) state updates per incoming chunk:
+ * - finalText: accumulated confirmed transcript (append-only string)
+ * - partial: current in-progress text (replaced in place)
+ * - translatedText: accumulated translations (if enabled)
+ *
+ * This avoids the previous O(n) array iteration on every update.
+ */
 export function useTranscript() {
-  const [chunks, setChunks] = useState<TranslatedChunk[]>([]);
+  const [finalText, setFinalText] = useState("");
+  const [partial, setPartial] = useState("");
+  const [translatedText, setTranslatedText] = useState("");
+  const [hasTranslation, setHasTranslation] = useState(false);
   const [connected, setConnected] = useState(false);
   const [statusText, setStatusText] = useState("");
+  const [sourceLang, setSourceLang] = useState("auto");
+  const [hasContent, setHasContent] = useState(false);
+
   const esRef = useRef<EventSource | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refs for copy — accumulate full text without triggering re-render
+  const fullTextRef = useRef("");
+  const fullTranslatedRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -41,21 +59,37 @@ export function useTranscript() {
 
           // Translated transcript chunk
           if (data.original_text !== undefined) {
-            const chunk: TranslatedChunk = data;
+            const text: string = data.original_text;
+            const translated: string = data.translated_text || text;
+            const isFinal: boolean = data.is_final;
+            const lang: string = data.source_language || "auto";
 
-            setChunks((prev) => {
-              // If last chunk was not final and this one replaces it (partial update)
-              if (
-                !chunk.is_final &&
-                prev.length > 0 &&
-                !prev[prev.length - 1].is_final
-              ) {
-                const updated = [...prev];
-                updated[updated.length - 1] = chunk;
+            // Detect translation update: same original_text, different translated_text.
+            // The Python orchestrator sends the original first (translated == original),
+            // then sends an update later with the actual translation.
+            if (isFinal && translated !== text) {
+              setHasTranslation(true);
+              setTranslatedText((prev) => {
+                const updated = prev ? prev + " " + translated : translated;
+                fullTranslatedRef.current = updated;
                 return updated;
-              }
-              return [...prev, chunk];
-            });
+              });
+              return;
+            }
+
+            setSourceLang(lang);
+            setHasContent(true);
+
+            if (isFinal) {
+              setFinalText((prev) => {
+                const updated = prev ? prev + " " + text : text;
+                fullTextRef.current = updated;
+                return updated;
+              });
+              setPartial("");
+            } else {
+              setPartial(text);
+            }
           }
         } catch {
           // Ignore malformed SSE data
@@ -63,11 +97,12 @@ export function useTranscript() {
       };
 
       es.onerror = () => {
-        console.log("[useTranscript] SSE error/disconnected, will reconnect...");
+        console.log(
+          "[useTranscript] SSE error/disconnected, will reconnect..."
+        );
         setConnected(false);
         es.close();
         esRef.current = null;
-        // Reconnect after delay
         if (!cancelled) {
           reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS);
         }
@@ -88,7 +123,32 @@ export function useTranscript() {
     };
   }, []);
 
-  const clearChunks = useCallback(() => setChunks([]), []);
+  const clearTranscript = useCallback(() => {
+    setFinalText("");
+    setPartial("");
+    setTranslatedText("");
+    setHasTranslation(false);
+    setHasContent(false);
+    setSourceLang("auto");
+    fullTextRef.current = "";
+    fullTranslatedRef.current = "";
+  }, []);
 
-  return { chunks, connected, statusText, clearChunks };
+  /** Get the full transcript text for clipboard copy. */
+  const getFullText = useCallback(() => {
+    return fullTranslatedRef.current || fullTextRef.current;
+  }, []);
+
+  return {
+    finalText,
+    partial,
+    translatedText,
+    hasTranslation,
+    connected,
+    statusText,
+    sourceLang,
+    hasContent,
+    clearTranscript,
+    getFullText,
+  };
 }

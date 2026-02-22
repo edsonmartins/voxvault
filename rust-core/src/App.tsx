@@ -8,7 +8,18 @@ import { useSession } from "./hooks/useSession";
 import { useNotification } from "./hooks/useNotification";
 
 function App() {
-  const { chunks, connected, statusText, clearChunks } = useTranscript();
+  const {
+    finalText,
+    partial,
+    translatedText,
+    hasTranslation,
+    connected,
+    statusText,
+    sourceLang,
+    hasContent,
+    clearTranscript,
+    getFullText,
+  } = useTranscript();
   const { session, isActive, loading, error, startSession, stopSession } =
     useSession();
 
@@ -38,10 +49,10 @@ function App() {
   }, [isActive]);
 
   const handleStart = useCallback(() => {
-    clearChunks();
+    clearTranscript();
     startSession();
     notify("VoxVault", "Session started — transcribing...");
-  }, [clearChunks, startSession, notify]);
+  }, [clearTranscript, startSession, notify]);
 
   const handleStop = useCallback(async () => {
     const result = await stopSession();
@@ -83,16 +94,13 @@ function App() {
   }, []);
 
   const handleCopy = useCallback(() => {
-    const text = chunks
-      .filter((c) => c.is_final)
-      .map((c) => c.translated_text || c.original_text)
-      .join("\n");
-    navigator.clipboard.writeText(text);
-  }, [chunks]);
+    const text = getFullText();
+    if (text) {
+      navigator.clipboard.writeText(text);
+    }
+  }, [getFullText]);
 
-  // Detect primary language from chunks
-  const detectedLang =
-    chunks.length > 0 ? chunks[chunks.length - 1].source_language : "auto";
+  const detectedLang = sourceLang;
 
   return (
     <div className="app">
@@ -109,7 +117,13 @@ function App() {
         statusText={statusText}
       />
 
-      <TranscriptView chunks={chunks} />
+      <TranscriptView
+        finalText={finalText}
+        partial={partial}
+        translatedText={translatedText}
+        hasTranslation={hasTranslation}
+        targetLang={targetLang}
+      />
 
       {/* Action Bar */}
       <div className="action-bar">
@@ -157,7 +171,7 @@ function App() {
           <button
             className="btn btn-secondary"
             onClick={handleCopy}
-            disabled={chunks.length === 0}
+            disabled={!hasContent}
             title="Copy transcript to clipboard"
           >
             <svg

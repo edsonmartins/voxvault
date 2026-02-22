@@ -44,6 +44,14 @@ struct Cli {
     /// Maximum audio duration (seconds) to accumulate before transcribing.
     #[arg(long, default_value_t = 30.0)]
     max_duration: f32,
+
+    /// Milliseconds of silence before splitting a speech segment (VAD).
+    #[arg(long, default_value_t = 1000)]
+    silence_pause_ms: u32,
+
+    /// RMS energy threshold for speech detection (lower = more sensitive).
+    #[arg(long, default_value_t = 0.005)]
+    speech_threshold: f32,
 }
 
 #[tokio::main]
@@ -106,49 +114,78 @@ async fn main() -> Result<()> {
 
     info!(device = cli.device, "Audio capture started. Press Ctrl+C to stop.");
 
-    // Processing loop
-    let mut processor = AudioProcessor::new(cli.min_duration, cli.max_duration);
+    // Processing loop — runs on a dedicated OS thread so GPU inference
+    // doesn't block the tokio runtime (which serves WebSocket connections).
+    let mut processor = AudioProcessor::new(
+        cli.min_duration,
+        cli.max_duration,
+        cli.silence_pause_ms,
+        cli.buffer_ms,
+        cli.speech_threshold,
+    );
+    let rt_handle = tokio::runtime::Handle::current();
 
-    let process_handle = tokio::spawn(async move {
-        while let Some(chunk) = audio_rx.recv().await {
-            // Feed chunk to processor
-            if let Some(audio_buffer) = processor.feed(chunk) {
-                let partial_sender = ws_sender.clone();
-                let partial_ts = chrono::Utc::now().timestamp_millis() as u64;
+    let process_join = std::thread::Builder::new()
+        .name("transcription".into())
+        .spawn(move || {
+            loop {
+                // Receive audio chunks via the tokio channel from a blocking context
+                let chunk = match rt_handle.block_on(audio_rx.recv()) {
+                    Some(c) => c,
+                    None => break, // channel closed
+                };
 
-                // Transcribe with per-token streaming
-                match engine.transcribe_streaming(audio_buffer, |partial_text: &str| {
-                    // Send each partial token immediately via WebSocket
-                    let msg = TranscriptMessage::transcript(
-                        partial_text.to_string(),
-                        "auto".to_string(),
-                        partial_ts,
-                        false, // is_final = false for partials
-                    );
-                    let _ = partial_sender.send(msg);
-                }) {
-                    Ok(result) => {
-                        if !result.text.is_empty() {
-                            println!("[{}] {}", result.language, result.text);
-
-                            // Send final complete text
-                            let msg = TranscriptMessage::transcript(
-                                result.text,
-                                result.language,
-                                result.timestamp_ms,
-                                true, // is_final = true
-                            );
-                            let _ = ws_sender.send(msg);
+                // Feed chunk to processor (VAD filters silence automatically)
+                if let Some(audio_buffer) = processor.feed(chunk) {
+                    // Drain any stale chunks that arrived during transcription
+                    // so we don't fall further behind
+                    let mut drained = 0;
+                    while let Ok(stale) = audio_rx.try_recv() {
+                        // Still feed to processor so VAD state stays consistent
+                        if let Some(_) = processor.feed(stale) {
+                            // Discard extra buffers — we'll process fresh audio next
+                            drained += 1;
                         }
                     }
-                    Err(e) => {
-                        tracing::error!("Transcription error: {}", e);
-                        let _ = ws_sender.send(TranscriptMessage::error(e.to_string()));
+                    if drained > 0 {
+                        tracing::debug!(drained, "Discarded stale audio buffers");
+                    }
+
+                    let partial_sender = ws_sender.clone();
+                    let partial_ts = chrono::Utc::now().timestamp_millis() as u64;
+
+                    // Transcribe with per-token streaming (blocking GPU work)
+                    match engine.transcribe_streaming(audio_buffer, |partial_text: &str| {
+                        let msg = TranscriptMessage::transcript(
+                            partial_text.to_string(),
+                            "auto".to_string(),
+                            partial_ts,
+                            false,
+                        );
+                        let _ = partial_sender.send(msg);
+                    }) {
+                        Ok(result) => {
+                            if !result.text.is_empty() {
+                                println!("[{}] {}", result.language, result.text);
+
+                                let msg = TranscriptMessage::transcript(
+                                    result.text,
+                                    result.language,
+                                    result.timestamp_ms,
+                                    true,
+                                );
+                                let _ = ws_sender.send(msg);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Transcription error: {}", e);
+                            let _ = ws_sender.send(TranscriptMessage::error(e.to_string()));
+                        }
                     }
                 }
             }
-        }
-    });
+        })
+        .expect("Failed to spawn transcription thread");
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c()
@@ -161,8 +198,10 @@ async fn main() -> Result<()> {
     // Process any remaining audio
     // (processor.flush() would be called here in a full implementation)
 
-    // Cancel tasks
-    process_handle.abort();
+    // Cancel tasks — dropping capture closes the audio channel,
+    // which will cause the transcription thread to exit its loop.
+    drop(capture);
+    let _ = process_join.join();
     ws_handle.abort();
 
     info!("VoxVault CLI shut down cleanly.");

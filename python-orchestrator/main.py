@@ -27,6 +27,7 @@ from models.schemas import (
     TranslatedChunk,
 )
 from services.minutes_generator import MinutesGenerator
+from services.sentence_merger import SentenceMerger
 from services.session_manager import SessionManager
 from services.translation import TranslationService, create_translation_service
 from services.ws_client import RustBridgeClient
@@ -49,6 +50,10 @@ translator: TranslationService = create_translation_service(
     gemma_model_path=settings.gemma_model_path,
 )
 session_mgr = SessionManager()
+sentence_merger = SentenceMerger(
+    timeout_ms=settings.sentence_merge_timeout_ms,
+    enabled=settings.sentence_merge_enabled,
+)
 minutes_gen = MinutesGenerator(translator)
 
 # Per-client SSE broadcast queues
@@ -86,16 +91,43 @@ def _broadcast_to_sse(data: dict) -> None:
                 pass
 
 
+async def _emit_final_chunk(chunk: TranslatedChunk) -> None:
+    """Broadcast a ready final chunk to SSE, buffer in session, and trigger translation."""
+    _broadcast_to_sse(chunk.model_dump())
+
+    if session_mgr.is_active:
+        await session_mgr.add_chunk(chunk)
+
+    if settings.translation_mode != "disabled":
+        asyncio.create_task(
+            _translate_and_broadcast(
+                chunk.original_text, chunk.source_language, chunk.timestamp
+            )
+        )
+
+
 async def _process_transcripts() -> None:
-    """Background task: receive from Rust WS, translate, buffer, broadcast to SSE."""
+    """Background task: receive from Rust WS, merge sentences, translate, broadcast."""
 
     listener_queue = ws_client.add_listener()
     logger.info("Transcript processor started, waiting for chunks...")
 
     while True:
+        # Use a short timeout so we can periodically check the sentence merger
         try:
-            raw_chunk = await listener_queue.get()
+            raw_chunk = await asyncio.wait_for(listener_queue.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            # No data — check if the sentence merger needs to flush
+            flushed = sentence_merger.check_timeout()
+            if flushed:
+                logger.info(f"[PIPELINE] Merger timeout flush: '{flushed.original_text[:60]}...'")
+                await _emit_final_chunk(flushed)
+            continue
         except asyncio.CancelledError:
+            # Flush merger before exiting
+            flushed = sentence_merger.flush()
+            if flushed:
+                await _emit_final_chunk(flushed)
             break
 
         chunk_type = raw_chunk.get("type", "")
@@ -114,7 +146,6 @@ async def _process_transcripts() -> None:
 
         logger.info(f"[PIPELINE] Received: '{text[:80]}...' final={is_final} clients={len(_sse_clients)}")
 
-        # Send original text immediately to SSE (no blocking)
         translated_chunk = TranslatedChunk(
             original_text=text,
             translated_text=text,  # original for now
@@ -124,18 +155,14 @@ async def _process_transcripts() -> None:
             is_final=is_final,
         )
 
-        # Buffer only final chunks in session (partials are transient)
-        if session_mgr.is_active and is_final:
-            await session_mgr.add_chunk(translated_chunk)
-
-        # Broadcast immediately with original text
-        _broadcast_to_sse(translated_chunk.model_dump())
-
-        # Translate asynchronously if enabled (non-blocking)
-        if is_final and settings.translation_mode != "disabled":
-            asyncio.create_task(
-                _translate_and_broadcast(text, language, timestamp)
-            )
+        if not is_final:
+            # Partial chunks → broadcast immediately (no delay)
+            _broadcast_to_sse(translated_chunk.model_dump())
+        else:
+            # Final chunks → pass through sentence merger
+            ready = sentence_merger.push(translated_chunk)
+            if ready:
+                await _emit_final_chunk(ready)
 
 
 async def _translate_and_broadcast(text: str, language: str, timestamp: int) -> None:
@@ -262,6 +289,12 @@ async def stop_session():
     """Stop the current session and return summary."""
     if not session_mgr.is_active:
         raise HTTPException(status_code=400, detail="No active session")
+
+    # Flush any pending sentence in the merger before ending the session
+    flushed = sentence_merger.flush()
+    if flushed:
+        logger.info(f"[SESSION] Flushing merger on stop: '{flushed.original_text[:60]}...'")
+        await _emit_final_chunk(flushed)
 
     session_info, transcript = await session_mgr.end_session()
     if not session_info:

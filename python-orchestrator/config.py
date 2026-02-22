@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Local model (optional, for mode=local)
     gemma_model_path: str = ""
 
+    # Sentence merge — join final segments that end mid-sentence
+    sentence_merge_enabled: bool = True
+    sentence_merge_timeout_ms: int = 2000
+
     # Storage
     sessions_dir: Path = Path.home() / "Documents" / "VoxVault" / "sessions"
     db_path: Path = Path.home() / "Documents" / "VoxVault" / "voxvault.db"
