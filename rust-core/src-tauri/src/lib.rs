@@ -47,6 +47,11 @@ async fn setup_audio_devices() -> Result<voxvault_core::audio::setup::SetupResul
 }
 
 #[tauri::command]
+async fn teardown_audio_devices() -> Result<voxvault_core::audio::setup::TeardownResult, String> {
+    Ok(voxvault_core::audio::setup::teardown_audio_devices())
+}
+
+#[tauri::command]
 async fn list_audio_devices() -> Result<Vec<voxvault_core::audio::setup::AudioDeviceInfo>, String> {
     Ok(voxvault_core::audio::setup::list_devices())
 }
@@ -79,6 +84,7 @@ pub fn run() {
             set_stealth_mode,
             get_stealth_mode,
             setup_audio_devices,
+            teardown_audio_devices,
             list_audio_devices,
         ])
         .setup(|app| {
@@ -116,6 +122,18 @@ pub fn run() {
             let tray = builder.build(app)?;
             app.manage(tray);
 
+            // Create audio devices on startup
+            let setup_result = voxvault_core::audio::setup::setup_audio_devices();
+            if let Some(ref cap) = setup_result.capture_device {
+                eprintln!("[VoxVault] Audio capture device ready: {cap}");
+            }
+            if let Some(ref mic) = setup_result.mic_device {
+                eprintln!("[VoxVault] Audio mic device ready: {mic}");
+            }
+            for err in &setup_result.errors {
+                eprintln!("[VoxVault] Audio setup warning: {err}");
+            }
+
             // Show window on startup
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.center();
@@ -127,4 +145,11 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running VoxVault");
+
+    // App has exited — clean up audio devices
+    let teardown = voxvault_core::audio::setup::teardown_audio_devices();
+    eprintln!(
+        "[VoxVault] Cleaned up {} audio device(s)",
+        teardown.devices_destroyed
+    );
 }

@@ -1,6 +1,6 @@
 //! Programmatic macOS audio device setup via CoreAudio.
 //!
-//! Creates Aggregate Devices required by VoxVault:
+//! Creates Aggregate Devices on app startup and destroys them on shutdown:
 //! - **VoxVault Capture**: BlackHole 2ch — captures system/meeting audio
 //! - **VoxVault Mic**: BlackHole 16ch — virtual mic for TTS output to Zoom/Teams
 
@@ -13,11 +13,12 @@ mod macos {
     use coreaudio_sys::{
         kAudioHardwareNoError, kAudioHardwarePropertyDevices, kAudioObjectPropertyElementMain,
         kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, AudioDeviceID,
-        AudioHardwareCreateAggregateDevice,
+        AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice,
         AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectPropertyAddress,
     };
     use std::ffi::c_void;
     use std::mem;
+    use std::sync::Mutex;
     use tracing::{error, info, warn};
 
     // CoreAudio aggregate device dictionary keys
@@ -40,6 +41,9 @@ mod macos {
     const BLACKHOLE_2CH_NAME: &str = "BlackHole 2ch";
     const BLACKHOLE_16CH_NAME: &str = "BlackHole 16ch";
 
+    /// Tracks device IDs created by this process so we can destroy them on shutdown.
+    static CREATED_DEVICES: Mutex<Vec<AudioDeviceID>> = Mutex::new(Vec::new());
+
     #[derive(Debug, Clone, serde::Serialize)]
     pub struct AudioDeviceInfo {
         pub id: u32,
@@ -53,6 +57,12 @@ mod macos {
         pub mic_device: Option<String>,
         pub blackhole_2ch_found: bool,
         pub blackhole_16ch_found: bool,
+        pub errors: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct TeardownResult {
+        pub devices_destroyed: usize,
         pub errors: Vec<String>,
     }
 
@@ -166,23 +176,22 @@ mod macos {
             .filter_map(|&id| {
                 let uid = get_device_uid(id)?;
                 let name = get_device_name(id)?;
-                Some(AudioDeviceInfo {
-                    id,
-                    uid,
-                    name,
-                })
+                Some(AudioDeviceInfo { id, uid, name })
             })
             .collect()
     }
 
     /// Find a device by name substring.
-    fn find_device_by_name<'a>(devices: &'a [AudioDeviceInfo], name: &str) -> Option<&'a AudioDeviceInfo> {
+    fn find_device_by_name<'a>(
+        devices: &'a [AudioDeviceInfo],
+        name: &str,
+    ) -> Option<&'a AudioDeviceInfo> {
         devices.iter().find(|d| d.name.contains(name))
     }
 
-    /// Check if an aggregate device with the given UID already exists.
-    fn aggregate_exists(devices: &[AudioDeviceInfo], uid: &str) -> bool {
-        devices.iter().any(|d| d.uid == uid)
+    /// Find a device by exact UID.
+    fn find_device_by_uid(devices: &[AudioDeviceInfo], uid: &str) -> Option<AudioDeviceID> {
+        devices.iter().find(|d| d.uid == uid).map(|d| d.id)
     }
 
     /// Create an aggregate device with a single sub-device.
@@ -197,9 +206,8 @@ mod macos {
         // Build sub-device entry
         let sub_uid_key = CFString::new(SUB_DEVICE_UID_KEY);
         let sub_uid_val = CFString::new(sub_device_uid);
-        let sub_dict = CFDictionary::from_CFType_pairs(&[
-            (sub_uid_key.as_CFType(), sub_uid_val.as_CFType()),
-        ]);
+        let sub_dict =
+            CFDictionary::from_CFType_pairs(&[(sub_uid_key.as_CFType(), sub_uid_val.as_CFType())]);
 
         let sub_array = CFArray::from_CFTypes(&[sub_dict]);
 
@@ -218,7 +226,10 @@ mod macos {
             (uid_key.as_CFType(), uid_val.as_CFType()),
             (sub_key.as_CFType(), sub_array.as_CFType()),
             (master_key.as_CFType(), master_val.as_CFType()),
-            (private_key.as_CFType(), CFBoolean::false_value().as_CFType()),
+            (
+                private_key.as_CFType(),
+                CFBoolean::false_value().as_CFType(),
+            ),
         ]);
 
         let mut device_id: AudioDeviceID = 0;
@@ -241,12 +252,33 @@ mod macos {
             ));
         }
 
+        // Track for cleanup on shutdown
+        if let Ok(mut created) = CREATED_DEVICES.lock() {
+            created.push(device_id);
+        }
+
         info!(device_id, name, uid, "Aggregate device created");
         Ok(device_id)
     }
 
+    /// Destroy an aggregate device by ID.
+    fn destroy_aggregate(device_id: AudioDeviceID) -> Result<(), String> {
+        let status = unsafe { AudioHardwareDestroyAggregateDevice(device_id) };
+
+        if status != kAudioHardwareNoError as i32 {
+            return Err(format!(
+                "AudioHardwareDestroyAggregateDevice failed for device {}: status={}",
+                device_id, status
+            ));
+        }
+
+        info!(device_id, "Aggregate device destroyed");
+        Ok(())
+    }
+
     /// Set up all VoxVault audio devices.
     ///
+    /// Creates aggregate devices if BlackHole is installed and they don't already exist.
     /// Returns a summary of what was created/found.
     pub fn setup_audio_devices() -> SetupResult {
         let mut result = SetupResult {
@@ -284,8 +316,11 @@ mod macos {
 
         // Create "VoxVault Capture" aggregate (BlackHole 2ch)
         if let Some(bh2_dev) = bh2 {
-            if aggregate_exists(&devices, VOXVAULT_CAPTURE_UID) {
-                info!("'{}' already exists, skipping", VOXVAULT_CAPTURE_NAME);
+            if let Some(existing_id) = find_device_by_uid(&devices, VOXVAULT_CAPTURE_UID) {
+                info!("'{}' already exists (id={}), tracking for cleanup", VOXVAULT_CAPTURE_NAME, existing_id);
+                if let Ok(mut created) = CREATED_DEVICES.lock() {
+                    created.push(existing_id);
+                }
                 result.capture_device = Some(VOXVAULT_CAPTURE_NAME.to_string());
             } else {
                 match create_aggregate(
@@ -306,8 +341,11 @@ mod macos {
 
         // Create "VoxVault Mic" aggregate (BlackHole 16ch)
         if let Some(bh16_dev) = bh16 {
-            if aggregate_exists(&devices, VOXVAULT_MIC_UID) {
-                info!("'{}' already exists, skipping", VOXVAULT_MIC_NAME);
+            if let Some(existing_id) = find_device_by_uid(&devices, VOXVAULT_MIC_UID) {
+                info!("'{}' already exists (id={}), tracking for cleanup", VOXVAULT_MIC_NAME, existing_id);
+                if let Ok(mut created) = CREATED_DEVICES.lock() {
+                    created.push(existing_id);
+                }
                 result.mic_device = Some(VOXVAULT_MIC_NAME.to_string());
             } else {
                 match create_aggregate(
@@ -329,6 +367,44 @@ mod macos {
         result
     }
 
+    /// Destroy all VoxVault aggregate devices created by this process.
+    ///
+    /// Call this on app shutdown to leave the system clean.
+    pub fn teardown_audio_devices() -> TeardownResult {
+        let mut result = TeardownResult {
+            devices_destroyed: 0,
+            errors: Vec::new(),
+        };
+
+        let device_ids: Vec<AudioDeviceID> = {
+            let mut created = CREATED_DEVICES.lock().unwrap_or_else(|e| e.into_inner());
+            created.drain(..).collect()
+        };
+
+        if device_ids.is_empty() {
+            info!("No VoxVault audio devices to clean up");
+            return result;
+        }
+
+        info!("Destroying {} VoxVault audio device(s)", device_ids.len());
+
+        for device_id in device_ids {
+            match destroy_aggregate(device_id) {
+                Ok(()) => result.devices_destroyed += 1,
+                Err(e) => {
+                    warn!("{}", e);
+                    result.errors.push(e);
+                }
+            }
+        }
+
+        info!(
+            destroyed = result.devices_destroyed,
+            "VoxVault audio device cleanup complete"
+        );
+        result
+    }
+
     /// List all devices (exposed for debugging / frontend).
     pub fn list_devices() -> Vec<AudioDeviceInfo> {
         list_all_devices()
@@ -342,5 +418,12 @@ pub use macos::*;
 pub fn setup_audio_devices() -> serde_json::Value {
     serde_json::json!({
         "error": "Audio device setup is only supported on macOS"
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn teardown_audio_devices() -> serde_json::Value {
+    serde_json::json!({
+        "error": "Audio device teardown is only supported on macOS"
     })
 }
