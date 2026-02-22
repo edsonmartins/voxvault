@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Punctuation that marks the end of a sentence
 _TERMINAL_PUNCT = frozenset(".!?。！？")
 # Characters that may follow terminal punctuation (quotes, parens)
-_TRAILING_CHARS = frozenset("\"')]}»"")
+_TRAILING_CHARS = frozenset('\'")]}\u00bb\u201c\u201d')
 
 
 def _ends_with_sentence(text: str) -> bool:
