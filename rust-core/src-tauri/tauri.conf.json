@@ -16,12 +16,10 @@
         "title": "VoxVault",
         "width": 420,
         "height": 600,
-        "decorations": false,
-        "alwaysOnTop": true,
+        "decorations": true,
         "visible": true,
         "center": true,
-        "contentProtected": true,
-        "resizable": false
+        "resizable": true
       }
     ],
     "security": {

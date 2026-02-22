@@ -104,15 +104,12 @@ pub fn run() {
             let tray = builder.build(app)?;
             app.manage(tray);
 
-            // Show window, then hide from Dock
+            // Show window on startup
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.center();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             Ok(())
         })
