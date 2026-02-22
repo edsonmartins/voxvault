@@ -14,7 +14,6 @@ struct HealthStatus {
     translation_mode: String,
 }
 
-/// Check if the Python orchestrator is reachable.
 #[tauri::command]
 async fn check_health() -> Result<HealthStatus, String> {
     let url = format!("{PYTHON_API}/api/health");
@@ -28,7 +27,6 @@ async fn check_health() -> Result<HealthStatus, String> {
     Ok(status)
 }
 
-/// Toggle window content protection (stealth mode for screen sharing).
 #[tauri::command]
 async fn set_stealth_mode(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
     window
@@ -37,11 +35,8 @@ async fn set_stealth_mode(window: tauri::WebviewWindow, enabled: bool) -> Result
     Ok(())
 }
 
-/// Get current stealth mode status.
 #[tauri::command]
 async fn get_stealth_mode(window: tauri::WebviewWindow) -> Result<bool, String> {
-    // Content protection is enabled by default in our config
-    // We track it via the frontend state; here we just confirm it's queryable
     let _ = window;
     Ok(true)
 }
@@ -51,18 +46,16 @@ fn show_or_create_window(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     } else {
-        // Window was closed, recreate it
-        let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+        let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
             .title("VoxVault")
             .inner_size(420.0, 600.0)
             .decorations(false)
             .always_on_top(true)
-            .skip_taskbar(true)
             .content_protected(true)
             .resizable(false)
+            .center()
             .visible(true)
-            .build()
-            .ok();
+            .build();
     }
 }
 
@@ -82,17 +75,15 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            // Build tray icon
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            // Build tray icon (single instance — no trayIcon in tauri.conf.json)
+            let mut builder = TrayIconBuilder::new()
                 .icon_as_template(true)
+                .tooltip("VoxVault")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_or_create_window(app),
-                    "quit" => {
-                        app.exit(0);
-                    }
+                    "quit" => app.exit(0),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -104,8 +95,24 @@ pub fn run() {
                     {
                         show_or_create_window(tray.app_handle());
                     }
-                })
-                .build(app)?;
+                });
+
+            if let Some(icon) = app.default_window_icon().cloned() {
+                builder = builder.icon(icon);
+            }
+
+            let tray = builder.build(app)?;
+            app.manage(tray);
+
+            // Show window, then hide from Dock
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.center();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             Ok(())
         })
