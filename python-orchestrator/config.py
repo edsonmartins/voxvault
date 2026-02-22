@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     sentence_merge_enabled: bool = True
     sentence_merge_timeout_ms: int = 2000
 
+    # Translation batching — accumulate text before sending one API call
+    translation_batch_delay_secs: float = 8.0
+
     # Storage
     sessions_dir: Path = Path.home() / "Documents" / "VoxVault" / "sessions"
     db_path: Path = Path.home() / "Documents" / "VoxVault" / "voxvault.db"

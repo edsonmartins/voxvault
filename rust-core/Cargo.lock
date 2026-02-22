@@ -8301,6 +8301,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-shell",
  "tokio",
+ "voxvault-core",
 ]
 
 [[package]]
@@ -8312,6 +8313,9 @@ dependencies = [
  "burn",
  "chrono",
  "clap",
+ "core-foundation",
+ "core-foundation-sys",
+ "coreaudio-sys",
  "cpal",
  "futures",
  "serde",

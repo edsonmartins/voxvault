@@ -41,6 +41,16 @@ async fn get_stealth_mode(window: tauri::WebviewWindow) -> Result<bool, String> 
     Ok(true)
 }
 
+#[tauri::command]
+async fn setup_audio_devices() -> Result<voxvault_core::audio::setup::SetupResult, String> {
+    Ok(voxvault_core::audio::setup::setup_audio_devices())
+}
+
+#[tauri::command]
+async fn list_audio_devices() -> Result<Vec<voxvault_core::audio::setup::AudioDeviceInfo>, String> {
+    Ok(voxvault_core::audio::setup::list_devices())
+}
+
 fn show_or_create_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -68,6 +78,8 @@ pub fn run() {
             check_health,
             set_stealth_mode,
             get_stealth_mode,
+            setup_audio_devices,
+            list_audio_devices,
         ])
         .setup(|app| {
             // Build tray menu

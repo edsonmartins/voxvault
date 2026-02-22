@@ -9,6 +9,7 @@ license = "Apache-2.0"
 name = "voxvault-cli"
 path = "src/bin/cli.rs"
 
+
 [dependencies]
 # Voxtral inference (local workspace dependency)
 voxtral-mini-realtime = { path = "../voxtral-mini-realtime-rs", default-features = false, features = ["wgpu", "native-tokenizer"] }
@@ -18,6 +19,12 @@ burn = { version = "0.20", default-features = false, features = ["std", "wgpu"] 
 
 # Audio capture
 cpal = "0.15"
+
+# macOS CoreAudio (aggregate device creation)
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-sys = "0.2"
+core-foundation-sys = "0.8"
+core-foundation = "0.10"
 
 # WebSocket server
 axum = { version = "0.7", features = ["ws"] }

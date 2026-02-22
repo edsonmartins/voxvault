@@ -91,18 +91,76 @@ def _broadcast_to_sse(data: dict) -> None:
                 pass
 
 
+class _TranslationBatcher:
+    """Accumulate text and translate in a single API call after a delay."""
+
+    def __init__(self, delay_secs: float = 8.0):
+        self._delay = delay_secs
+        self._pending: list[tuple[str, str, int]] = []  # (text, lang, timestamp)
+        self._timer: asyncio.Task | None = None
+
+    def add(self, text: str, language: str, timestamp: int) -> None:
+        self._pending.append((text, language, timestamp))
+        # Reset the timer on each new chunk
+        if self._timer and not self._timer.done():
+            self._timer.cancel()
+        self._timer = asyncio.create_task(self._delayed_flush())
+
+    async def _delayed_flush(self) -> None:
+        await asyncio.sleep(self._delay)
+        await self.flush()
+
+    async def flush(self) -> None:
+        if not self._pending:
+            return
+        items = self._pending.copy()
+        self._pending.clear()
+        if self._timer and not self._timer.done():
+            self._timer.cancel()
+            self._timer = None
+
+        combined_text = " ".join(text for text, _, _ in items)
+        language = items[0][1]
+        first_ts = items[0][2]
+
+        logger.info(
+            f"[TRANSLATE] Batch: {len(items)} chunks, {len(combined_text)} chars in 1 API call"
+        )
+
+        try:
+            translated = await translator.translate(
+                combined_text, language, settings.target_language
+            )
+            if translated != combined_text:
+                update = TranslatedChunk(
+                    original_text=combined_text,
+                    translated_text=translated,
+                    source_language=language,
+                    target_language=settings.target_language,
+                    timestamp=first_ts,
+                    is_final=True,
+                )
+                _broadcast_to_sse(update.model_dump())
+        except Exception as e:
+            logger.error(f"Batch translation error: {e}")
+
+
+_translation_batcher = _TranslationBatcher(delay_secs=settings.translation_batch_delay_secs)
+
+
 async def _emit_final_chunk(chunk: TranslatedChunk) -> None:
-    """Broadcast a ready final chunk to SSE, buffer in session, and trigger translation."""
+    """Broadcast a ready final chunk to SSE, buffer in session, and queue translation."""
     _broadcast_to_sse(chunk.model_dump())
 
     if session_mgr.is_active:
         await session_mgr.add_chunk(chunk)
 
-    if settings.translation_mode != "disabled":
-        asyncio.create_task(
-            _translate_and_broadcast(
-                chunk.original_text, chunk.source_language, chunk.timestamp
-            )
+    if (
+        settings.translation_mode != "disabled"
+        and chunk.source_language != settings.target_language
+    ):
+        _translation_batcher.add(
+            chunk.original_text, chunk.source_language, chunk.timestamp
         )
 
 
@@ -163,26 +221,6 @@ async def _process_transcripts() -> None:
             ready = sentence_merger.push(translated_chunk)
             if ready:
                 await _emit_final_chunk(ready)
-
-
-async def _translate_and_broadcast(text: str, language: str, timestamp: int) -> None:
-    """Translate text in background and broadcast the translation as an update."""
-    try:
-        translated_text = await translator.translate(
-            text, language, settings.target_language
-        )
-        if translated_text != text:
-            update = TranslatedChunk(
-                original_text=text,
-                translated_text=translated_text,
-                source_language=language,
-                target_language=settings.target_language,
-                timestamp=timestamp,
-                is_final=True,
-            )
-            _broadcast_to_sse(update.model_dump())
-    except Exception as e:
-        logger.error(f"Background translation error: {e}")
 
 
 # --- Application lifecycle ---
@@ -295,6 +333,9 @@ async def stop_session():
     if flushed:
         logger.info(f"[SESSION] Flushing merger on stop: '{flushed.original_text[:60]}...'")
         await _emit_final_chunk(flushed)
+
+    # Flush any pending translation batch
+    await _translation_batcher.flush()
 
     session_info, transcript = await session_mgr.end_session()
     if not session_info:
