@@ -337,6 +337,11 @@ async def stop_session():
     # Flush any pending translation batch
     await _translation_batcher.flush()
 
+    # Reset Apple FM sessions between meetings (free accumulated context)
+    if settings.translation_mode == "apple" and hasattr(translator, "reset_session"):
+        translator.reset_session()
+        logger.info("[SESSION] Apple provider sessions reset")
+
     session_info, transcript = await session_mgr.end_session()
     if not session_info:
         raise HTTPException(status_code=500, detail="Failed to end session")
@@ -458,12 +463,15 @@ async def update_settings(request: SettingsUpdateRequest):
 @app.get("/api/health")
 async def health():
     """Health check endpoint."""
-    return {
+    data = {
         "status": "ok",
         "rust_connected": ws_client.is_connected,
         "session_active": session_mgr.is_active,
         "translation_mode": settings.translation_mode,
     }
+    if settings.translation_mode == "apple" and hasattr(translator, "is_available"):
+        data["apple_fm_available"] = translator.is_available
+    return data
 
 
 if __name__ == "__main__":

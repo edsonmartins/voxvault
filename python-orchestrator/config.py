@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     api_port: int = 8766
 
     # Translation
-    translation_mode: Literal["disabled", "claude", "openai", "openrouter", "local"] = "disabled"
+    translation_mode: Literal["disabled", "claude", "openai", "openrouter", "local", "apple"] = "disabled"
     target_language: str = "pt"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
