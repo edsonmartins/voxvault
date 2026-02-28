@@ -6,6 +6,7 @@ use tracing::info;
 
 use voxvault_core::audio::capture::AudioCapture;
 use voxvault_core::audio::processor::AudioProcessor;
+use voxvault_core::audio::setup;
 use voxvault_core::server::websocket::{TranscriptMessage, TranscriptServer};
 use voxvault_core::voxtral::engine::VoxtralEngine;
 
@@ -17,8 +18,8 @@ struct Cli {
     #[arg(long)]
     list_devices: bool,
 
-    /// Audio input device name (e.g., "VoxtralMeet Input").
-    #[arg(short, long, default_value = "VoxtralMeet Input")]
+    /// Audio input device name (e.g., "BlackHole 2ch").
+    #[arg(short, long, default_value = "BlackHole 2ch")]
     device: String,
 
     /// Path to the Voxtral Q4 GGUF model file.
@@ -65,6 +66,20 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // Set up audio devices (Multi-Output + Capture aggregates)
+    let setup_result = setup::setup_audio_devices();
+    if let Some(ref mo) = setup_result.multi_output_device {
+        info!("Multi-Output device ready: {}", mo);
+    }
+    if let Some(ref cap) = setup_result.capture_device {
+        info!("Capture device ready: {}", cap);
+    }
+    if !setup_result.errors.is_empty() {
+        for e in &setup_result.errors {
+            tracing::warn!("Audio setup: {}", e);
+        }
+    }
 
     // List devices mode
     if cli.list_devices {
@@ -195,14 +210,18 @@ async fn main() -> Result<()> {
     info!("Shutting down...");
     capture.stop();
 
-    // Process any remaining audio
-    // (processor.flush() would be called here in a full implementation)
-
     // Cancel tasks — dropping capture closes the audio channel,
     // which will cause the transcription thread to exit its loop.
     drop(capture);
     let _ = process_join.join();
     ws_handle.abort();
+
+    // Tear down audio devices (restore original output, destroy aggregates)
+    let teardown = setup::teardown_audio_devices();
+    info!(
+        destroyed = teardown.devices_destroyed,
+        "Audio device cleanup complete"
+    );
 
     info!("VoxVault CLI shut down cleanly.");
     Ok(())

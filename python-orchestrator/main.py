@@ -98,26 +98,35 @@ class _TranslationBatcher:
         self._delay = delay_secs
         self._pending: list[tuple[str, str, int]] = []  # (text, lang, timestamp)
         self._timer: asyncio.Task | None = None
+        self._flush_task: asyncio.Task | None = None
 
     def add(self, text: str, language: str, timestamp: int) -> None:
         self._pending.append((text, language, timestamp))
-        # Reset the timer on each new chunk
+        # Only reset the timer if no flush is in progress
+        if self._flush_task and not self._flush_task.done():
+            # A translation is running — don't cancel it, just accumulate
+            return
         if self._timer and not self._timer.done():
             self._timer.cancel()
         self._timer = asyncio.create_task(self._delayed_flush())
 
     async def _delayed_flush(self) -> None:
         await asyncio.sleep(self._delay)
-        await self.flush()
+        self._flush_task = asyncio.create_task(self._do_flush())
+        await self._flush_task
 
     async def flush(self) -> None:
+        """Public flush — used on session stop."""
+        if self._timer and not self._timer.done():
+            self._timer.cancel()
+            self._timer = None
+        await self._do_flush()
+
+    async def _do_flush(self) -> None:
         if not self._pending:
             return
         items = self._pending.copy()
         self._pending.clear()
-        if self._timer and not self._timer.done():
-            self._timer.cancel()
-            self._timer = None
 
         combined_text = " ".join(text for text, _, _ in items)
         language = items[0][1]
@@ -128,8 +137,12 @@ class _TranslationBatcher:
         )
 
         try:
-            translated = await translator.translate(
-                combined_text, language, settings.target_language
+            translated = await asyncio.shield(
+                translator.translate(combined_text, language, settings.target_language)
+            )
+            logger.info(
+                f"[TRANSLATE] Result: changed={translated != combined_text} "
+                f"src='{combined_text[:60]}...' dst='{translated[:60]}...'"
             )
             if translated != combined_text:
                 update = TranslatedChunk(
@@ -141,8 +154,14 @@ class _TranslationBatcher:
                     is_final=True,
                 )
                 _broadcast_to_sse(update.model_dump())
+        except asyncio.CancelledError:
+            logger.warning("[TRANSLATE] Translation cancelled — will retry on next batch")
         except Exception as e:
             logger.error(f"Batch translation error: {e}")
+
+        # If more items accumulated during translation, schedule another flush
+        if self._pending:
+            self._timer = asyncio.create_task(self._delayed_flush())
 
 
 _translation_batcher = _TranslationBatcher(delay_secs=settings.translation_batch_delay_secs)
