@@ -19,6 +19,7 @@ function App() {
     hasContent,
     clearTranscript,
     getFullText,
+    rtf,
   } = useTranscript();
   const { session, isActive, loading, error, startSession, stopSession } =
     useSession();
@@ -115,6 +116,7 @@ function App() {
         language={detectedLang}
         duration={duration}
         statusText={statusText}
+        rtf={rtf}
       />
 
       <TranscriptView

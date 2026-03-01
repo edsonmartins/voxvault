@@ -114,6 +114,9 @@ impl VoxtralEngine {
         let mel_extractor = self.mel_extractor.as_ref().context("Mel extractor not loaded")?;
         let t_embed = self.t_embed.as_ref().context("Time embedding not loaded")?;
 
+        let start_time = Instant::now();
+        let audio_duration_secs = audio.samples.len() as f64 / audio.sample_rate as f64;
+
         let pad_config = PadConfig::voxtral();
         let chunk_config = ChunkConfig::voxtral().with_max_frames(self.max_mel_frames);
 
@@ -155,11 +158,19 @@ impl VoxtralEngine {
 
         let full_text = texts.join(" ");
 
+        let elapsed_secs = start_time.elapsed().as_secs_f64();
+        let rtf = if audio_duration_secs > 0.0 {
+            Some(elapsed_secs / audio_duration_secs)
+        } else {
+            None
+        };
+
         Ok(TranscriptResult {
             text: full_text,
             language: "auto".to_string(), // Voxtral auto-detects language
             timestamp_ms,
             is_final: true,
+            rtf,
         })
     }
 

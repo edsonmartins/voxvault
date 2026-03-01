@@ -21,17 +21,27 @@ pub struct TranscriptMessage {
     pub language: String,
     pub timestamp: u64,
     pub is_final: bool,
+    /// Real-Time Factor (processing_time / audio_duration). Only set for final transcripts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtf: Option<f64>,
 }
 
 impl TranscriptMessage {
     /// Create a transcript message.
-    pub fn transcript(text: String, language: String, timestamp: u64, is_final: bool) -> Self {
+    pub fn transcript(
+        text: String,
+        language: String,
+        timestamp: u64,
+        is_final: bool,
+        rtf: Option<f64>,
+    ) -> Self {
         Self {
             msg_type: "transcript".to_string(),
             text,
             language,
             timestamp,
             is_final,
+            rtf,
         }
     }
 
@@ -43,6 +53,7 @@ impl TranscriptMessage {
             language: String::new(),
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
             is_final: false,
+            rtf: None,
         }
     }
 
@@ -54,6 +65,7 @@ impl TranscriptMessage {
             language: String::new(),
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
             is_final: false,
+            rtf: None,
         }
     }
 }

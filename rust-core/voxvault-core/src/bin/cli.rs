@@ -176,18 +176,24 @@ async fn main() -> Result<()> {
                             "auto".to_string(),
                             partial_ts,
                             false,
+                            None, // no RTF for partials
                         );
                         let _ = partial_sender.send(msg);
                     }) {
                         Ok(result) => {
                             if !result.text.is_empty() {
-                                println!("[{}] {}", result.language, result.text);
+                                if let Some(rtf) = result.rtf {
+                                    println!("[{}] (RTF={:.2}) {}", result.language, rtf, result.text);
+                                } else {
+                                    println!("[{}] {}", result.language, result.text);
+                                }
 
                                 let msg = TranscriptMessage::transcript(
                                     result.text,
                                     result.language,
                                     result.timestamp_ms,
                                     true,
+                                    result.rtf,
                                 );
                                 let _ = ws_sender.send(msg);
                             }

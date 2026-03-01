@@ -100,6 +100,9 @@ class RustBridgeClient:
         except Exception as e:
             logger.error(f"WebSocket listen error: {e}")
             self._connected = False
+        except BaseException as e:
+            logger.error(f"WebSocket critical error: {e}", exc_info=True)
+            self._connected = False
 
     async def _on_message(self, chunk: TranscriptChunk) -> None:
         """Handle a received transcript chunk."""

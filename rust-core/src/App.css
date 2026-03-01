@@ -173,6 +173,28 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.status-rtf {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.rtf-fast {
+  color: #66bb6a;
+  background: rgba(102, 187, 106, 0.15);
+}
+
+.rtf-normal {
+  color: #ffa726;
+  background: rgba(255, 167, 38, 0.15);
+}
+
+.rtf-slow {
+  color: #ef5350;
+  background: rgba(239, 83, 80, 0.15);
+}
+
 .status-text {
   color: var(--text-muted);
   font-size: 10px;

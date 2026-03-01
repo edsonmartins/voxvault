@@ -22,6 +22,7 @@ export function useTranscript() {
   const [statusText, setStatusText] = useState("");
   const [sourceLang, setSourceLang] = useState("auto");
   const [hasContent, setHasContent] = useState(false);
+  const [rtf, setRtf] = useState<number | null>(null);
 
   const esRef = useRef<EventSource | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -77,6 +78,10 @@ export function useTranscript() {
               return;
             }
 
+            if (data.rtf != null) {
+              setRtf(data.rtf);
+            }
+
             setSourceLang(lang);
             setHasContent(true);
 
@@ -130,6 +135,7 @@ export function useTranscript() {
     setHasTranslation(false);
     setHasContent(false);
     setSourceLang("auto");
+    setRtf(null);
     fullTextRef.current = "";
     fullTranslatedRef.current = "";
   }, []);
@@ -150,5 +156,6 @@ export function useTranscript() {
     hasContent,
     clearTranscript,
     getFullText,
+    rtf,
   };
 }

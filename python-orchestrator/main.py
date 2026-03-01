@@ -7,6 +7,7 @@ and exposes SSE + REST endpoints for the Tauri frontend.
 import asyncio
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from models.schemas import (
     TranslatedChunk,
 )
 from services.minutes_generator import MinutesGenerator
+from services.post_processor import PostProcessor, detect_language
 from services.sentence_merger import SentenceMerger
 from services.session_manager import SessionManager
 from services.translation import TranslationService, create_translation_service
@@ -55,6 +57,7 @@ sentence_merger = SentenceMerger(
     enabled=settings.sentence_merge_enabled,
 )
 minutes_gen = MinutesGenerator(translator)
+post_processor = PostProcessor()
 
 # Per-client SSE broadcast queues
 _sse_clients: list[asyncio.Queue] = []
@@ -89,6 +92,9 @@ def _broadcast_to_sse(data: dict) -> None:
                 q.put_nowait(data)
             except Exception:
                 pass
+
+
+MAX_TRANSLATE_CHARS = 2000
 
 
 class _TranslationBatcher:
@@ -137,9 +143,12 @@ class _TranslationBatcher:
         )
 
         try:
-            translated = await asyncio.shield(
-                translator.translate(combined_text, language, settings.target_language)
-            )
+            if len(combined_text) > MAX_TRANSLATE_CHARS:
+                translated = await self._translate_chunked(combined_text, language)
+            else:
+                translated = await asyncio.shield(
+                    translator.translate(combined_text, language, settings.target_language)
+                )
             logger.info(
                 f"[TRANSLATE] Result: changed={translated != combined_text} "
                 f"src='{combined_text[:60]}...' dst='{translated[:60]}...'"
@@ -162,6 +171,33 @@ class _TranslationBatcher:
         # If more items accumulated during translation, schedule another flush
         if self._pending:
             self._timer = asyncio.create_task(self._delayed_flush())
+
+    async def _translate_chunked(self, text: str, source_lang: str) -> str:
+        """Split long text at sentence boundaries and translate each chunk."""
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        chunks: list[str] = []
+        current_chunk = ""
+
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) + 1 > MAX_TRANSLATE_CHARS and current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = sentence
+            else:
+                current_chunk = (current_chunk + " " + sentence).strip()
+
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+
+        logger.info(f"[TRANSLATE] Chunked: {len(text)} chars -> {len(chunks)} translation chunks")
+
+        translated_chunks = []
+        for chunk in chunks:
+            translated = await asyncio.shield(
+                translator.translate(chunk, source_lang, settings.target_language)
+            )
+            translated_chunks.append(translated)
+
+        return " ".join(translated_chunks)
 
 
 _translation_batcher = _TranslationBatcher(delay_secs=settings.translation_batch_delay_secs)
@@ -190,56 +226,72 @@ async def _process_transcripts() -> None:
     logger.info("Transcript processor started, waiting for chunks...")
 
     while True:
-        # Use a short timeout so we can periodically check the sentence merger
         try:
-            raw_chunk = await asyncio.wait_for(listener_queue.get(), timeout=0.5)
-        except asyncio.TimeoutError:
-            # No data — check if the sentence merger needs to flush
-            flushed = sentence_merger.check_timeout()
-            if flushed:
-                logger.info(f"[PIPELINE] Merger timeout flush: '{flushed.original_text[:60]}...'")
-                await _emit_final_chunk(flushed)
-            continue
+            # Use a short timeout so we can periodically check the sentence merger
+            try:
+                raw_chunk = await asyncio.wait_for(listener_queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                # No data — check if the sentence merger needs to flush
+                flushed = sentence_merger.check_timeout()
+                if flushed:
+                    logger.info(f"[PIPELINE] Merger timeout flush: '{flushed.original_text[:60]}...'")
+                    await _emit_final_chunk(flushed)
+                continue
+
+            chunk_type = raw_chunk.get("type", "")
+            if chunk_type != "transcript":
+                logger.debug(f"[PIPELINE] Non-transcript: type={chunk_type}")
+                _broadcast_to_sse(raw_chunk)
+                continue
+
+            text = raw_chunk.get("text", "")
+            language = raw_chunk.get("language", "auto")
+            timestamp = raw_chunk.get("timestamp", 0)
+            is_final = raw_chunk.get("is_final", False)
+
+            if not text.strip():
+                continue
+
+            # Post-process final chunks (punctuation, capitalization, ITN)
+            if is_final:
+                text = post_processor.process(text)
+
+            # Detect language if Rust sends "auto"
+            if is_final and language == "auto":
+                language = detect_language(text)
+
+            rtf = raw_chunk.get("rtf", None)
+
+            logger.info(f"[PIPELINE] Received: '{text[:80]}...' final={is_final} lang={language} clients={len(_sse_clients)}")
+
+            translated_chunk = TranslatedChunk(
+                original_text=text,
+                translated_text=text,  # original for now
+                source_language=language,
+                target_language=settings.target_language,
+                timestamp=timestamp,
+                is_final=is_final,
+                rtf=rtf,
+            )
+
+            if not is_final:
+                # Partial chunks → broadcast immediately (no delay)
+                _broadcast_to_sse(translated_chunk.model_dump())
+            else:
+                # Final chunks → pass through sentence merger
+                ready = sentence_merger.push(translated_chunk)
+                if ready:
+                    await _emit_final_chunk(ready)
+
         except asyncio.CancelledError:
             # Flush merger before exiting
             flushed = sentence_merger.flush()
             if flushed:
                 await _emit_final_chunk(flushed)
             break
-
-        chunk_type = raw_chunk.get("type", "")
-        if chunk_type != "transcript":
-            logger.debug(f"[PIPELINE] Non-transcript: type={chunk_type}")
-            _broadcast_to_sse(raw_chunk)
+        except BaseException as e:
+            logger.error(f"[PIPELINE] Unexpected error (will continue): {e}", exc_info=True)
             continue
-
-        text = raw_chunk.get("text", "")
-        language = raw_chunk.get("language", "auto")
-        timestamp = raw_chunk.get("timestamp", 0)
-        is_final = raw_chunk.get("is_final", False)
-
-        if not text.strip():
-            continue
-
-        logger.info(f"[PIPELINE] Received: '{text[:80]}...' final={is_final} clients={len(_sse_clients)}")
-
-        translated_chunk = TranslatedChunk(
-            original_text=text,
-            translated_text=text,  # original for now
-            source_language=language,
-            target_language=settings.target_language,
-            timestamp=timestamp,
-            is_final=is_final,
-        )
-
-        if not is_final:
-            # Partial chunks → broadcast immediately (no delay)
-            _broadcast_to_sse(translated_chunk.model_dump())
-        else:
-            # Final chunks → pass through sentence merger
-            ready = sentence_merger.push(translated_chunk)
-            if ready:
-                await _emit_final_chunk(ready)
 
 
 # --- Application lifecycle ---
@@ -314,6 +366,9 @@ async def stream_transcript():
                     yield ": keepalive\n\n"
                 except asyncio.CancelledError:
                     break
+                except Exception as e:
+                    logger.error(f"SSE event error: {e}")
+                    yield ": error\n\n"
         finally:
             _remove_sse_client(client_queue)
 

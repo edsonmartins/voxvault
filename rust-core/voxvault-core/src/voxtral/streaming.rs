@@ -75,6 +75,9 @@ impl<'a> StreamingTranscriber<'a> {
         audio: AudioBuffer,
         mut on_partial: F,
     ) -> Result<TranscriptResult> {
+        let start_time = std::time::Instant::now();
+        let audio_duration_secs = audio.samples.len() as f64 / audio.sample_rate as f64;
+
         let pad_config = PadConfig::voxtral();
         let chunk_config = ChunkConfig::voxtral().with_max_frames(self.max_mel_frames);
         let timestamp_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -110,11 +113,19 @@ impl<'a> StreamingTranscriber<'a> {
 
         let full_text = texts.join(" ");
 
+        let elapsed_secs = start_time.elapsed().as_secs_f64();
+        let rtf = if audio_duration_secs > 0.0 {
+            Some(elapsed_secs / audio_duration_secs)
+        } else {
+            None
+        };
+
         Ok(TranscriptResult {
             text: full_text,
             language: "auto".to_string(),
             timestamp_ms,
             is_final: true,
+            rtf,
         })
     }
 

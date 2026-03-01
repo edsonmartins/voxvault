@@ -4,6 +4,7 @@ interface StatusBarProps {
   language: string;
   duration: number;
   statusText: string;
+  rtf: number | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -12,12 +13,19 @@ function formatDuration(seconds: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function rtfLabel(rtf: number): { text: string; className: string } {
+  if (rtf < 0.5) return { text: "Fast", className: "rtf-fast" };
+  if (rtf <= 1.0) return { text: "Normal", className: "rtf-normal" };
+  return { text: "Slow", className: "rtf-slow" };
+}
+
 export function StatusBar({
   connected,
   isRecording,
   language,
   duration,
   statusText,
+  rtf,
 }: StatusBarProps) {
   return (
     <div className="status-bar">
@@ -33,6 +41,11 @@ export function StatusBar({
           <span className="recording-indicator" />
           <span className="status-lang">{language.toUpperCase()}</span>
           <span className="status-duration">{formatDuration(duration)}</span>
+          {rtf !== null && (
+            <span className={`status-rtf ${rtfLabel(rtf).className}`}>
+              {rtfLabel(rtf).text}
+            </span>
+          )}
         </div>
       )}
 

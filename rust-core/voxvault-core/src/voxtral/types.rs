@@ -11,4 +11,6 @@ pub struct TranscriptResult {
     pub timestamp_ms: u64,
     /// Whether this is a final (complete) chunk or partial.
     pub is_final: bool,
+    /// Real-Time Factor = processing_time / audio_duration. Lower is better.
+    pub rtf: Option<f64>,
 }

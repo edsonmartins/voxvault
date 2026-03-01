@@ -1,0 +1,59 @@
+# VoxVault Docker Compose — Development convenience setup.
+#
+# The Rust CLI requires Metal GPU access, which is not available
+# inside Docker containers on macOS. For production, run the Rust CLI
+# natively and only containerize Python + Frontend.
+#
+# Usage:
+#   docker compose up -d                    # Start Python + Frontend
+#   cargo run --bin voxvault-cli            # Run Rust natively (separate terminal)
+#   docker compose --profile full up -d     # Full stack (Linux/CI only)
+
+services:
+  python-orchestrator:
+    build: ./python-orchestrator
+    ports:
+      - "8766:8766"
+    environment:
+      VOXVAULT_RUST_WS_URL: "ws://host.docker.internal:8765"
+      VOXVAULT_API_HOST: "0.0.0.0"
+      VOXVAULT_TRANSLATION_MODE: "${VOXVAULT_TRANSLATION_MODE:-disabled}"
+      VOXVAULT_TARGET_LANGUAGE: "${VOXVAULT_TARGET_LANGUAGE:-pt}"
+      VOXVAULT_ANTHROPIC_API_KEY: "${VOXVAULT_ANTHROPIC_API_KEY:-}"
+      VOXVAULT_OPENAI_API_KEY: "${VOXVAULT_OPENAI_API_KEY:-}"
+      VOXVAULT_OPENROUTER_API_KEY: "${VOXVAULT_OPENROUTER_API_KEY:-}"
+    volumes:
+      - voxvault-data:/root/Documents/VoxVault
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8766/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./rust-core
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "1420:80"
+    depends_on:
+      python-orchestrator:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Full stack profile (Linux/CI only — Metal GPU not available in Docker on macOS)
+  rust-core:
+    build:
+      context: ./rust-core
+      dockerfile: Dockerfile
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./models:/app/models:ro
+    profiles:
+      - full
+    restart: unless-stopped
+
+volumes:
+  voxvault-data:

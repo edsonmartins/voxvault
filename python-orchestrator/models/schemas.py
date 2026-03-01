@@ -16,6 +16,7 @@ class TranscriptChunk(BaseModel):
     language: str = ""
     timestamp: int = 0
     is_final: bool = False
+    rtf: float | None = None
 
 
 # --- Internal models ---
@@ -30,6 +31,8 @@ class TranslatedChunk(BaseModel):
     target_language: str
     timestamp: int
     is_final: bool = True
+    detected_language: str | None = None
+    rtf: float | None = None
 
 
 # --- API request/response models ---

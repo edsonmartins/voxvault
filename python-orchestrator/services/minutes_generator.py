@@ -135,9 +135,13 @@ class MinutesGenerator:
         summaries = []
         for i, chunk in enumerate(chunks, 1):
             logger.info(f"Summarizing chunk {i}/{len(chunks)}...")
-            prompt = CHUNK_SUMMARY_PROMPT.format(chunk=chunk, language=language)
-            summary = await self.llm.generate_text(prompt, max_tokens=800)
-            summaries.append(f"### Segment {i}\n{summary}")
+            try:
+                prompt = CHUNK_SUMMARY_PROMPT.format(chunk=chunk, language=language)
+                summary = await self.llm.generate_text(prompt, max_tokens=800)
+                summaries.append(f"### Segment {i}\n{summary}")
+            except Exception as e:
+                logger.warning(f"Chunk {i} summarization failed: {e}, using raw text")
+                summaries.append(f"### Segment {i}\n{chunk[:500]}...")
 
         # Synthesize final minutes from summaries
         combined = "\n\n".join(summaries)

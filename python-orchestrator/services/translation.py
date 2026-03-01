@@ -53,25 +53,34 @@ class ClaudeTranslation(TranslationService):
             return text
 
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                system=(
-                    f"You are a precise translator. Translate from {source_lang} to {target_lang}. "
-                    "Output ONLY the translated text, no explanations or metadata."
+            response = await asyncio.wait_for(
+                self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    system=(
+                        f"You are a precise translator. Translate from {source_lang} to {target_lang}. "
+                        "Output ONLY the translated text, no explanations or metadata."
+                    ),
+                    messages=[{"role": "user", "content": text}],
                 ),
-                messages=[{"role": "user", "content": text}],
+                timeout=30.0,
             )
             return response.content[0].text
+        except asyncio.TimeoutError:
+            logger.error("Claude translation timed out (30s)")
+            return text
         except Exception as e:
             logger.error(f"Claude translation error: {e}")
             return text
 
     async def generate_text(self, prompt: str, max_tokens: int = 2000) -> str:
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
+        response = await asyncio.wait_for(
+            self.client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            ),
+            timeout=60.0,
         )
         return response.content[0].text
 
@@ -90,30 +99,39 @@ class OpenAITranslation(TranslationService):
             return text
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Translate from {source_lang} to {target_lang}. "
-                            "Output ONLY the translated text."
-                        ),
-                    },
-                    {"role": "user", "content": text},
-                ],
-                temperature=0,
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                f"Translate from {source_lang} to {target_lang}. "
+                                "Output ONLY the translated text."
+                            ),
+                        },
+                        {"role": "user", "content": text},
+                    ],
+                    temperature=0,
+                ),
+                timeout=30.0,
             )
             return response.choices[0].message.content or text
+        except asyncio.TimeoutError:
+            logger.error("OpenAI translation timed out (30s)")
+            return text
         except Exception as e:
             logger.error(f"OpenAI translation error: {e}")
             return text
 
     async def generate_text(self, prompt: str, max_tokens: int = 2000) -> str:
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
+        response = await asyncio.wait_for(
+            self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+            ),
+            timeout=60.0,
         )
         return response.choices[0].message.content or ""
 
@@ -135,30 +153,39 @@ class OpenRouterTranslation(TranslationService):
             return text
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Translate from {source_lang} to {target_lang}. "
-                            "Output ONLY the translated text."
-                        ),
-                    },
-                    {"role": "user", "content": text},
-                ],
-                temperature=0,
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                f"Translate from {source_lang} to {target_lang}. "
+                                "Output ONLY the translated text."
+                            ),
+                        },
+                        {"role": "user", "content": text},
+                    ],
+                    temperature=0,
+                ),
+                timeout=30.0,
             )
             return response.choices[0].message.content or text
+        except asyncio.TimeoutError:
+            logger.error("OpenRouter translation timed out (30s)")
+            return text
         except Exception as e:
             logger.error(f"OpenRouter translation error: {e}")
             return text
 
     async def generate_text(self, prompt: str, max_tokens: int = 2000) -> str:
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
+        response = await asyncio.wait_for(
+            self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+            ),
+            timeout=60.0,
         )
         return response.choices[0].message.content or ""
 
@@ -316,8 +343,13 @@ class AppleTranslation(TranslationService):
         try:
             async with self._lock:
                 session = self._get_session(target_lang)
-                response = await session.respond(prompt=prompt)
+                response = await asyncio.wait_for(
+                    session.respond(prompt=prompt), timeout=30.0
+                )
             return str(response).strip()
+        except asyncio.TimeoutError:
+            logger.error("Apple FM translation timed out (30s)")
+            return text
         except Exception as e:
             # Context window exceeded — recreate session and retry once
             if "context" in str(e).lower() or "exceeded" in str(e).lower():
@@ -326,7 +358,9 @@ class AppleTranslation(TranslationService):
                 try:
                     async with self._lock:
                         session = self._get_session(target_lang)
-                        response = await session.respond(prompt=prompt)
+                        response = await asyncio.wait_for(
+                            session.respond(prompt=prompt), timeout=30.0
+                        )
                     return str(response).strip()
                 except Exception as e2:
                     logger.error(f"Apple FM retry failed: {e2}")
